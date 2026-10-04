@@ -1,0 +1,11 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.LAHutchins91/claim",
+  "title": "Claim",
+  "description": "Approved claims, offers, proof, voice, and banned phrases for brand assistants.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/LAHutchins91/claim-mcp",
+    "source": "github"
+  }
+}
