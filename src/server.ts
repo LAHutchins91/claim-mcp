@@ -337,6 +337,24 @@ function guardMcpOrigin(req: Request, res: Response) {
 }
 
 const PUBLIC_MCP_METHODS = new Set(["initialize", "notifications/initialized", "tools/list", "ping"]);
+const STREAMABLE_HTTP_ACCEPT = "application/json, text/event-stream";
+
+/** Streamable HTTP returns 406 unless Accept lists both media types. Fill in a missing or partial header before the transport reads it. */
+function ensureStreamableHttpAccept(req: Request, _res: Response, next: express.NextFunction) {
+  const raw = req.headers.accept;
+  const accept = Array.isArray(raw) ? raw.join(", ") : (raw ?? "");
+  if (accept.includes("application/json") && accept.includes("text/event-stream")) {
+    next();
+    return;
+  }
+  req.headers.accept = STREAMABLE_HTTP_ACCEPT;
+  const rawHeaders = req.rawHeaders;
+  for (let index = rawHeaders.length - 2; index >= 0; index -= 2) {
+    if (rawHeaders[index]?.toLowerCase() === "accept") rawHeaders.splice(index, 2);
+  }
+  rawHeaders.push("Accept", STREAMABLE_HTTP_ACCEPT);
+  next();
+}
 
 function mcpMethods(body: unknown): string[] {
   if (Array.isArray(body)) return body.flatMap((item) => mcpMethods(item));
@@ -349,7 +367,7 @@ app.options("/mcp", (req, res) => {
   res.status(204).end();
 });
 
-app.post("/mcp", async (req, res) => {
+app.post("/mcp", ensureStreamableHttpAccept, async (req, res) => {
   if (!guardMcpOrigin(req, res)) return;
   if (rejectsApiKey(req)) {
     res.set("WWW-Authenticate", `Bearer resource_metadata="${APP_BASE_URL}/.well-known/oauth-protected-resource/mcp"`);

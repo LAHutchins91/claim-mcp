@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import app from "../src/server.js";
@@ -137,4 +137,53 @@ describe("streamable http discovery", () => {
     });
     expect(response.status).toBe(401);
   });
+
+  it("lists tools when Accept is missing or not both media types", async () => {
+    const body = { jsonrpc: "2.0", id: 5, method: "tools/list" };
+    for (const acceptHeader of ["application/json", "*/*", "text/event-stream"]) {
+      const response = await post(body, { accept: acceptHeader });
+      expect(response.status, acceptHeader).toBe(200);
+      expect(response.text).not.toMatch(/Not Acceptable/);
+      expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("list_brands");
+    }
+
+    const missing = await postWithoutAccept(port, body);
+    expect(missing.status).toBe(200);
+    expect(missing.text).not.toMatch(/Not Acceptable/);
+    expect(JSON.parse(missing.text).result.tools.map((tool: { name: string }) => tool.name)).toContain("list_brands");
+  });
+
+  it("still requires a subscriber for tools/call when Accept is only application/json", async () => {
+    const response = await post(
+      { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "list_brands", arguments: {} } },
+      { accept: "application/json" }
+    );
+    expect(response.status).toBe(401);
+    expect(response.text).not.toMatch(/Not Acceptable/);
+  });
 });
+
+function postWithoutAccept(port: number, body: unknown) {
+  const payload = JSON.stringify(body);
+  return new Promise<{ status: number; text: string }>((resolve, reject) => {
+    const req = httpRequest(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/mcp",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(payload)
+        }
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
+      }
+    );
+    req.on("error", reject);
+    req.end(payload);
+  });
+}
