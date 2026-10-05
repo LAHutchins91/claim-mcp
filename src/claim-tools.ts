@@ -217,7 +217,7 @@ export function createClaimServer(db: ClaimDb, userId: string) {
       source: z.string().trim().min(1).max(500),
       summary: text
     },
-    { ...write, idempotentHint: true },
+    { ...write, destructiveHint: true, idempotentHint: true },
     async (args) => {
       const { brandId, proofId, claimId, title, source, summary } = args as {
         brandId: string;
@@ -252,7 +252,7 @@ export function createClaimServer(db: ClaimDb, userId: string) {
       voiceSummary: z.string().trim().min(1).max(4000),
       voiceTraits: z.array(z.string().trim().min(1).max(80)).max(20).default([])
     },
-    { ...write, idempotentHint: true },
+    { ...write, destructiveHint: true, idempotentHint: true },
     async (args) => {
       const { brandId, voiceSummary, voiceTraits } = args as { brandId: string; voiceSummary: string; voiceTraits: string[] };
       await brand(brandId);
