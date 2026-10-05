@@ -92,6 +92,42 @@ describe("streamable http discovery", () => {
     }
   });
 
+  it("publishes a directory-ready privacy policy", async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/privacy`);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("October 5, 2026");
+    expect(body).toContain("Ouroboros Apps / Lawrence Hutchins");
+    expect(body).toContain('href="/support"');
+    for (const section of ["Information we process", "Why and where", "Control and retention", "Security and changes"]) {
+      expect(body).toContain(section);
+    }
+    for (const fact of ["brands", "approved claims", "offers", "proof", "voice", "banned phrases", "account email", "Supabase", "Vercel", "Google", "Stripe", "ChatGPT"]) {
+      expect(body).toContain(fact);
+    }
+    expect(body).not.toMatch(/[$€£]\s*\d/);
+    expect(body.toLowerCase()).not.toMatch(/\bfree\b/);
+  });
+
+  it("serves the OpenAI apps challenge from OPENAI_APPS_CHALLENGE", async () => {
+    const previous = process.env.OPENAI_APPS_CHALLENGE;
+    try {
+      delete process.env.OPENAI_APPS_CHALLENGE;
+      const missing = await fetch(`http://127.0.0.1:${port}/.well-known/openai-apps-challenge`);
+      expect(missing.status).toBe(404);
+      expect(missing.headers.get("content-type")).toMatch(/text/);
+
+      process.env.OPENAI_APPS_CHALLENGE = "challenge-token";
+      const present = await fetch(`http://127.0.0.1:${port}/.well-known/openai-apps-challenge`);
+      expect(present.status).toBe(200);
+      expect(present.headers.get("content-type")).toMatch(/text/);
+      expect(await present.text()).toBe("challenge-token");
+    } finally {
+      if (previous === undefined) delete process.env.OPENAI_APPS_CHALLENGE;
+      else process.env.OPENAI_APPS_CHALLENGE = previous;
+    }
+  });
+
   it("requires a subscriber before a tool call", async () => {
     const response = await post({
       jsonrpc: "2.0",
