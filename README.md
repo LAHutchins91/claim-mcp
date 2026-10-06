@@ -73,3 +73,7 @@ Copy `supabase/schema.sql` into the Supabase SQL editor before brand tools can r
 - `OPENAI_APPS_CHALLENGE` (optional)
 
 Stripe Checkout shows the billing interval and trial before purchase.
+
+---
+
+More from Ouroboros: https://ouroborosapps.com
