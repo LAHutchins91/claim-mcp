@@ -4,12 +4,13 @@ import { connectPageBody } from "./connect-page.js";
 export const logo = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="56" fill="#14120e"/><path d="M64 72h128M64 128h128M64 184h80" fill="none" stroke="#e4b15a" stroke-width="18" stroke-linecap="round"/><circle cx="188" cy="184" r="18" fill="#f6f1e7"/></svg>`;
 
 const page = (title: string, body: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Claim</title><link rel="icon" href="/icon.svg"><style>body{margin:0;background:#14120e;color:#f6f1e7;font:17px/1.65 system-ui}main{max-width:840px;margin:40px auto;padding:24px}a{color:#e4b15a}h1{line-height:1.15;font-size:40px}h2{margin-top:32px}h3{margin:18px 0 6px}nav,footer{display:flex;flex-wrap:wrap;gap:18px}section{border:1px solid #3a342a;border-radius:16px;padding:22px;margin:22px 0}input,textarea,select,button{font:inherit;box-sizing:border-box;max-width:100%;padding:10px;border:1px solid #8a7044;border-radius:8px;background:#221e18;color:inherit}input,textarea{width:100%}label{display:block;margin:12px 0}button{cursor:pointer;margin:12px 8px 12px 0}code,pre{overflow-wrap:anywhere}pre{overflow:auto;background:#221e18;padding:12px;border-radius:8px}#message{white-space:pre-wrap}small{color:#cbbfaa}</style></head><body><main><nav><a href="/app">Claim</a><a href="/connect">Connect an assistant</a><a href="/support">Support</a></nav><h1>${title}</h1>${body}<footer><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/data">Your data</a></footer></main></body></html>`;
+const accessPage = (title: string, body: string) => page(title, body).replace('<a href="/app">Claim</a>', "<span>Claim</span>");
 
 export function installPublicPages(app: Express, baseUrl: string, supabaseUrl: string, anonKey: string) {
   app.get("/access", (_req, res) =>
-    res.type("html").send(page(
+    res.type("html").send(accessPage(
       "Claim access",
-      `<p>Brand tools are available with Claim Pro or an active 14-day trial. This connection has no brand-tool entitlement at present. It cannot change your plan or start a purchase.</p><p>Verify that you connected the intended account. <a href="/connections">Manage the connection</a> or <a href="/support">contact support</a> if access looks incorrect.</p>`
+      `<p>Claim tools are available to Claim accounts with active access. The account on this connection does not currently have access to brand tools. Nothing on this page can change your account or start a purchase.</p><p>Verify that you connected the intended account. <a href="/connections">Manage the connection</a> or <a href="/support">contact support</a> if access looks incorrect.</p>`
     ))
   );
   app.get("/icon.svg", (_req, res) => res.type("svg").send(logo));

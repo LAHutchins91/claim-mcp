@@ -13,7 +13,7 @@ const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: fal
 const result = (data: unknown) => ({ structuredContent: { data }, content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const post = (data: unknown): RequestInit => ({ method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(data) });
 
-const SIGN_IN = "Sign in to Claim. Brand tools require Pro or an active 14-day trial.";
+const SIGN_IN = "Sign in to Claim to use brand tools.";
 
 export async function loadBrandCopyInputs(db: ClaimDb, brandId: string) {
   const brands = await db<Row[]>(`/rest/v1/claim_brands?id=eq.${encodeURIComponent(brandId)}&select=id,name`);

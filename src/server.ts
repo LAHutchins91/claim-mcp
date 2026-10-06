@@ -116,7 +116,7 @@ async function requireAccount(req: Request) {
     throw new HttpError(503, "Could not verify your subscription. Please retry.");
   }
   if (!profiles[0] || !["active", "trialing"].includes(profiles[0].subscription_status)) {
-    throw new HttpError(403, "A Claim Pro subscription or active 14-day trial is required.");
+    throw new HttpError(403, "This Claim account does not currently include access to Claim tools. Check that you connected the intended account.");
   }
   return auth;
 }
@@ -385,6 +385,9 @@ app.post("/mcp", ensureStreamableHttpAccept, async (req, res) => {
       token = auth.token;
       userId = auth.user.id;
     } catch (error) {
+      if (error instanceof HttpError && error.status === 403) {
+        return res.status(403).json({ error: error.message, access_information: `${APP_BASE_URL}/access` });
+      }
       res.set("WWW-Authenticate", `Bearer resource_metadata="${APP_BASE_URL}/.well-known/oauth-protected-resource/mcp"`);
       if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
       return res.status(401).json({ error: "Sign in to Claim to use brand tools." });
