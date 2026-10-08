@@ -8,6 +8,13 @@ Sign in with your Claim account when the assistant opens OAuth. Do not paste an 
 
 The MCP path on a deployment is `/mcp`. Registry metadata is in `server.json` (`io.github.LAHutchins91/claim`).
 
+## Hosted server
+
+- MCP server URL: `https://claim-continuity2.vercel.app/mcp` (Streamable HTTP, OAuth sign-in)
+- Docs: https://ouroborosapps.com/docs/claim
+- Status: early access. Paste the URL into Claude, Cursor, Grok, or ChatGPT developer mode.
+- Registry name: `io.github.LAHutchins91/claim`
+
 ## What the assistant can do
 
 After you approve the connection, the server exposes these tools:
