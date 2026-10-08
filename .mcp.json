@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "claim": {
+      "url": "https://claim-continuity2.vercel.app/mcp"
+    }
+  }
+}
