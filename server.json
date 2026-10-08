@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.LAHutchins91/claim",
-  "title": "Claim",
-  "description": "Approved brand claims, offers, proof, voice, and banned phrases for AI assistants.",
-  "version": "1.0.2",
+  "title": "Claim by Ouroboros Apps",
+  "description": "Approved brand claims, offers, proof, and banned phrases for AI-written marketing copy",
+  "version": "1.0.3",
   "websiteUrl": "https://ouroborosapps.com/docs/claim",
   "repository": {
     "url": "https://github.com/LAHutchins91/claim-mcp",
