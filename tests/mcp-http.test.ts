@@ -72,7 +72,10 @@ describe("streamable http discovery", () => {
       "save_brand_voice",
       "save_banned_phrase",
       "remove_banned_phrase",
-      "check_brand_copy"
+      "check_brand_copy",
+      "list_expiring_facts",
+      "get_fact_history",
+      "get_fact_usage_log"
     ]);
   });
 

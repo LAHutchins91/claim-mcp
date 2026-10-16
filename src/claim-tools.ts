@@ -13,17 +13,48 @@ const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: fal
 const result = (data: unknown) => ({ structuredContent: { data }, content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const post = (data: unknown): RequestInit => ({ method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(data) });
 
+const STALE_WARNING = "STALE: this record passed its expires_at. Do not repeat it in copy. Ask the user to re-approve or retire it.";
+const expiresAt = z.string().trim().min(1).max(40).nullable().optional()
+  .describe("Optional ISO 8601 date or datetime after which this claim or offer is stale. Omit to keep the current expiry; null clears it.");
+
+export function isExpired(row: { expires_at?: unknown }, now = Date.now()): boolean {
+  if (typeof row.expires_at !== "string" || !row.expires_at) return false;
+  const time = Date.parse(row.expires_at);
+  return !Number.isNaN(time) && time <= now;
+}
+
+function annotate(row: Row, now = Date.now()): Row & { stale: boolean } {
+  const stale = isExpired(row, now);
+  return { ...row, expires_at: row.expires_at ?? null, stale, ...(stale ? { stale_warning: STALE_WARNING } : {}) };
+}
+
+function normalizeExpiry(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const time = Date.parse(String(value));
+  if (Number.isNaN(time)) throw new Error("expiresAt must be an ISO 8601 date or datetime");
+  return new Date(time).toISOString();
+}
+
 const SIGN_IN = "Sign in to Claim to use brand tools.";
 
 export async function loadBrandCopyInputs(db: ClaimDb, brandId: string) {
   const brands = await db<Row[]>(`/rest/v1/claim_brands?id=eq.${encodeURIComponent(brandId)}&select=id,name`);
   if (!brands[0]) throw new Error("Brand not found");
-  const [claims, offers, banned] = await Promise.all([
-    db<ApprovedClaim[]>(`/rest/v1/claim_approved_claims?brand_id=eq.${encodeURIComponent(brandId)}&select=statement,status&limit=200`),
-    db<BrandOffer[]>(`/rest/v1/claim_offers?brand_id=eq.${encodeURIComponent(brandId)}&select=name,terms,active&limit=100`),
+  const [rawClaims, rawOffers, banned] = await Promise.all([
+    db<Row[]>(`/rest/v1/claim_approved_claims?brand_id=eq.${encodeURIComponent(brandId)}&select=id,statement,status,revision,expires_at&limit=200`),
+    db<Row[]>(`/rest/v1/claim_offers?brand_id=eq.${encodeURIComponent(brandId)}&select=id,name,terms,active,revision,expires_at&limit=100`),
     db<BannedPhrase[]>(`/rest/v1/claim_banned_phrases?brand_id=eq.${encodeURIComponent(brandId)}&select=phrase&limit=200`)
   ]);
-  return { brand: brands[0], claims, offers, bannedPhrases: banned };
+  const now = Date.now();
+  // Expired claims and offers never authorize copy.
+  const claims: ApprovedClaim[] = rawClaims.map((row) => ({ statement: String(row.statement), status: isExpired(row, now) ? "RETIRED" : String(row.status) }));
+  const offers: BrandOffer[] = rawOffers.map((row) => ({ name: String(row.name), terms: String(row.terms), active: row.active === true && !isExpired(row, now) }));
+  const stale = [
+    ...rawClaims.filter((row) => isExpired(row, now)).map((row) => ({ type: "claim", id: row.id, revision: row.revision, expires_at: row.expires_at })),
+    ...rawOffers.filter((row) => isExpired(row, now)).map((row) => ({ type: "offer", id: row.id, revision: row.revision, expires_at: row.expires_at }))
+  ];
+  return { brand: brands[0], claims, offers, bannedPhrases: banned, rawClaims, rawOffers, stale };
 }
 
 export function createClaimServer(db: ClaimDb, userId: string) {
@@ -72,6 +103,27 @@ export function createClaimServer(db: ClaimDb, userId: string) {
     );
   }
 
+  // Best effort: logging or history failures never break the main call.
+  async function logUsage(brandId: string, toolName: string, factType: "claim" | "offer", rows: Row[]) {
+    if (!rows.length) return;
+    const usedAt = new Date().toISOString();
+    try {
+      await db("/rest/v1/claim_fact_usage", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(rows.map((row) => ({ brand_id: brandId, tool: toolName, fact_type: factType, fact_id: row.id, revision: row.revision, stale: isExpired(row), used_at: usedAt })))
+      });
+    } catch { /* ignore */ }
+  }
+
+  async function keepVersion(brandId: string, factType: "claim" | "offer", row: Row) {
+    try {
+      await db("/rest/v1/claim_fact_versions", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ brand_id: brandId, fact_type: factType, fact_id: row.id, revision: row.revision, snapshot: row, replaced_at: new Date().toISOString() })
+      });
+    } catch { /* ignore */ }
+  }
+
   async function brand(brandId: string) {
     const rows = await db<Row[]>(`/rest/v1/claim_brands?id=eq.${encodeURIComponent(brandId)}&select=id,name,voice_summary,voice_traits,updated_at`);
     if (!rows[0]) throw new Error("Brand not found");
@@ -102,15 +154,22 @@ export function createClaimServer(db: ClaimDb, userId: string) {
     async ({ brandId }) => {
       const current = await brand(brandId);
       const [claims, offers, proof, banned] = await Promise.all([
-        db<Row[]>(`/rest/v1/claim_approved_claims?brand_id=eq.${brandId}&select=id,statement,status,revision,updated_at&order=updated_at.desc,id&limit=200`),
-        db<Row[]>(`/rest/v1/claim_offers?brand_id=eq.${brandId}&select=id,name,terms,active,revision,updated_at&order=updated_at.desc,id&limit=100`),
+        db<Row[]>(`/rest/v1/claim_approved_claims?brand_id=eq.${brandId}&select=id,statement,status,revision,updated_at,expires_at&order=updated_at.desc,id&limit=200`),
+        db<Row[]>(`/rest/v1/claim_offers?brand_id=eq.${brandId}&select=id,name,terms,active,revision,updated_at,expires_at&order=updated_at.desc,id&limit=100`),
         db<Row[]>(`/rest/v1/claim_proof?brand_id=eq.${brandId}&select=id,claim_id,title,source,summary,updated_at&order=updated_at.desc,id&limit=200`),
         db<Row[]>(`/rest/v1/claim_banned_phrases?brand_id=eq.${brandId}&select=id,phrase,note&order=phrase,id&limit=200`)
       ]);
+      const now = Date.now();
+      const markedClaims = claims.map((row) => annotate(row, now));
+      const markedOffers = offers.map((row) => annotate(row, now));
+      await logUsage(brandId, "get_brand_guide", "claim", claims);
+      await logUsage(brandId, "get_brand_guide", "offer", offers);
+      const staleCount = [...markedClaims, ...markedOffers].filter((row) => row.stale).length;
       return {
         brand: current,
-        approved_claims: claims,
-        offers,
+        approved_claims: markedClaims,
+        offers: markedOffers,
+        ...(staleCount ? { stale_warning: `${staleCount} claim(s) or offer(s) are past expires_at. ${STALE_WARNING}` } : {}),
         proof,
         banned_phrases: banned,
         limits: { claims: 200, offers: 100, proof: 200, banned_phrases: 200 },
@@ -128,7 +187,8 @@ export function createClaimServer(db: ClaimDb, userId: string) {
       claimId: id.optional(),
       statement: text,
       status: z.enum(["APPROVED", "RETIRED"]).default("APPROVED"),
-      expectedRevision: z.number().int().positive().optional()
+      expectedRevision: z.number().int().positive().optional(),
+      expiresAt
     },
     { ...write, destructiveHint: true, idempotentHint: true },
     async (args) => {
@@ -140,25 +200,28 @@ export function createClaimServer(db: ClaimDb, userId: string) {
         expectedRevision?: number;
       };
       await brand(brandId);
+      const expiry = normalizeExpiry((args as { expiresAt?: unknown }).expiresAt);
+      const expiryField = expiry === undefined ? {} : { expires_at: expiry };
       if (!claimId) {
-        return (await db<Row[]>("/rest/v1/claim_approved_claims", post({ brand_id: brandId, statement, status })))[0];
+        return annotate((await db<Row[]>("/rest/v1/claim_approved_claims", post({ brand_id: brandId, statement, status, ...expiryField })))[0]);
       }
       if (!expectedRevision) throw new Error("Revision conflict");
-      const existing = await db<Row[]>(`/rest/v1/claim_approved_claims?id=eq.${claimId}&brand_id=eq.${brandId}&select=id,statement,status,revision`);
+      const existing = await db<Row[]>(`/rest/v1/claim_approved_claims?id=eq.${claimId}&brand_id=eq.${brandId}&select=*`);
       const row = existing[0];
       if (!row) throw new Error("Claim not found");
       if (row.revision !== expectedRevision) throw new Error("Revision conflict");
-      if (row.statement === statement && row.status === status) return row;
+      if (row.statement === statement && row.status === status && (expiry === undefined || (row.expires_at ?? null) === expiry)) return annotate(row);
+      await keepVersion(brandId, "claim", row);
       const updated = await db<Row[]>(
         `/rest/v1/claim_approved_claims?id=eq.${claimId}&brand_id=eq.${brandId}&revision=eq.${expectedRevision}`,
         {
           method: "PATCH",
           headers: { Prefer: "return=representation" },
-          body: JSON.stringify({ statement, status, revision: expectedRevision + 1, updated_at: new Date().toISOString() })
+          body: JSON.stringify({ statement, status, ...expiryField, revision: expectedRevision + 1, updated_at: new Date().toISOString() })
         }
       );
       if (!updated[0]) throw new Error("Revision conflict");
-      return updated[0];
+      return annotate(updated[0]);
     }
   );
 
@@ -171,7 +234,8 @@ export function createClaimServer(db: ClaimDb, userId: string) {
       name: short,
       terms: text,
       active: z.boolean().default(true),
-      expectedRevision: z.number().int().positive().optional()
+      expectedRevision: z.number().int().positive().optional(),
+      expiresAt
     },
     { ...write, destructiveHint: true, idempotentHint: true },
     async (args) => {
@@ -184,25 +248,28 @@ export function createClaimServer(db: ClaimDb, userId: string) {
         expectedRevision?: number;
       };
       await brand(brandId);
+      const expiry = normalizeExpiry((args as { expiresAt?: unknown }).expiresAt);
+      const expiryField = expiry === undefined ? {} : { expires_at: expiry };
       if (!offerId) {
-        return (await db<Row[]>("/rest/v1/claim_offers", post({ brand_id: brandId, name, terms, active })))[0];
+        return annotate((await db<Row[]>("/rest/v1/claim_offers", post({ brand_id: brandId, name, terms, active, ...expiryField })))[0]);
       }
       if (!expectedRevision) throw new Error("Revision conflict");
-      const existing = await db<Row[]>(`/rest/v1/claim_offers?id=eq.${offerId}&brand_id=eq.${brandId}&select=id,name,terms,active,revision`);
+      const existing = await db<Row[]>(`/rest/v1/claim_offers?id=eq.${offerId}&brand_id=eq.${brandId}&select=*`);
       const row = existing[0];
       if (!row) throw new Error("Offer not found");
       if (row.revision !== expectedRevision) throw new Error("Revision conflict");
-      if (row.name === name && row.terms === terms && row.active === active) return row;
+      if (row.name === name && row.terms === terms && row.active === active && (expiry === undefined || (row.expires_at ?? null) === expiry)) return annotate(row);
+      await keepVersion(brandId, "offer", row);
       const updated = await db<Row[]>(
         `/rest/v1/claim_offers?id=eq.${offerId}&brand_id=eq.${brandId}&revision=eq.${expectedRevision}`,
         {
           method: "PATCH",
           headers: { Prefer: "return=representation" },
-          body: JSON.stringify({ name, terms, active, revision: expectedRevision + 1, updated_at: new Date().toISOString() })
+          body: JSON.stringify({ name, terms, active, ...expiryField, revision: expectedRevision + 1, updated_at: new Date().toISOString() })
         }
       );
       if (!updated[0]) throw new Error("Revision conflict");
-      return updated[0];
+      return annotate(updated[0]);
     }
   );
 
@@ -317,14 +384,57 @@ export function createClaimServer(db: ClaimDb, userId: string) {
         offers: loaded.offers,
         bannedPhrases: loaded.bannedPhrases
       });
+      await logUsage(brandId, "check_brand_copy", "claim", loaded.rawClaims);
+      await logUsage(brandId, "check_brand_copy", "offer", loaded.rawOffers);
       return {
         brand: { id: loaded.brand.id, name: loaded.brand.name },
         ...checked,
+        ...(loaded.stale.length ? { stale_ignored: loaded.stale, stale_warning: "Expired claims and offers were treated as retired or inactive for this check." } : {}),
         guidance:
           checked.verdict === "approved"
             ? "No banned phrase, invented guarantee, invented discount, or unapproved offer was found. Still follow the saved voice, and do not add a claim or an offer that the guide does not contain."
             : "Do not deliver this draft. Remove each violation or replace it with an approved claim or an active offer. Proof and voice do not authorize the rejected language."
       };
+    }
+  );
+
+  tool(
+    "list_expiring_facts",
+    "List approved claims and active offers that already expired or expire within the next N days, so the user can re-approve or retire them. Read-only.",
+    { brandId: id, withinDays: z.number().int().min(0).max(3650).default(14) },
+    read,
+    async ({ brandId, withinDays }) => {
+      await brand(brandId);
+      const horizon = new Date(Date.now() + Number(withinDays) * 86_400_000).toISOString();
+      const [claims, offers] = await Promise.all([
+        db<Row[]>(`/rest/v1/claim_approved_claims?brand_id=eq.${brandId}&status=eq.APPROVED&expires_at=lte.${encodeURIComponent(horizon)}&select=id,statement,status,revision,expires_at&order=expires_at&limit=200`),
+        db<Row[]>(`/rest/v1/claim_offers?brand_id=eq.${brandId}&active=is.true&expires_at=lte.${encodeURIComponent(horizon)}&select=id,name,terms,active,revision,expires_at&order=expires_at&limit=100`)
+      ]);
+      const facts = [...claims.map((row) => ({ fact_type: "claim", ...annotate(row) })), ...offers.map((row) => ({ fact_type: "offer", ...annotate(row) }))];
+      return { within_days: Number(withinDays), facts, expired: facts.filter((row) => row.stale).length };
+    }
+  );
+
+  tool(
+    "get_fact_history",
+    "Read earlier versions of one approved claim or offer, newest first. Each change keeps the replaced version.",
+    { brandId: id, factId: id },
+    read,
+    async ({ brandId, factId }) => {
+      await brand(brandId);
+      return { versions: await db<Row[]>(`/rest/v1/claim_fact_versions?brand_id=eq.${brandId}&fact_id=eq.${factId}&select=fact_type,fact_id,revision,snapshot,replaced_at&order=revision.desc&limit=100`) };
+    }
+  );
+
+  tool(
+    "get_fact_usage_log",
+    "Read which claim or offer id and revision each Claim read returned, newest first. Use it to debug copy that used an old or stale record.",
+    { brandId: id, factId: id.optional(), limit: z.number().int().min(1).max(500).default(100) },
+    read,
+    async ({ brandId, factId, limit }) => {
+      await brand(brandId);
+      const fact = typeof factId === "string" ? `&fact_id=eq.${factId}` : "";
+      return { usage: await db<Row[]>(`/rest/v1/claim_fact_usage?brand_id=eq.${brandId}${fact}&select=tool,fact_type,fact_id,revision,stale,used_at&order=used_at.desc&limit=${Number(limit)}`) };
     }
   );
 
